@@ -2,6 +2,8 @@
 
 **Write a sentence. A transformer reads its emotion live, and shows which words made it decide.**
 
+### ▶ [Try it live: mood-reader-seven.vercel.app](https://mood-reader-seven.vercel.app)
+
 My third machine learning project and my first in NLP (natural language processing). I fine-tuned two transformer models on real Reddit comments, compressed them 4× with no loss in accuracy, and built a web app that runs them entirely in the browser.
 
 ![Mood Reader reading "I do not feel happy at all." The words "not" and "happy" glow, and the verdict is sadness with a hint of anger](docs/app.png)
