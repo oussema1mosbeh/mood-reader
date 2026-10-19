@@ -1,0 +1,370 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mood Reader</title>
+<meta name="description" content="Type a sentence and a transformer model reads its emotion live, and shows which words made it decide. Runs entirely in your browser.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,400;0,9..144,600;1,9..144,300;1,9..144,400&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* "Aura": emotions are light, so they glow on a deep night canvas.
+   One colour per emotion; the screen blends the colours of what you write. */
+:root{--night:#0E0D14;--panel:#16141F;--cream:#F4EFE6;--mut:rgba(244,239,230,.58);--faint:rgba(244,239,230,.32);--line:rgba(244,239,230,.1);
+  --joy:#FFB703;--sadness:#4A7BD0;--anger:#E63946;--fear:#7B2CBF;--surprise:#FF7AA2;--disgust:#6A994E;--neutral:#9AA0A6;
+  --c1:#9AA0A6;--c2:#4A7BD0;--c3:#7B2CBF;--a1:.18;--a2:.12;--a3:.1;--mood:#F4EFE6;
+  --serif:'Fraunces',Georgia,serif;--sans:'Inter',system-ui,sans-serif;--ease:cubic-bezier(.16,1,.3,1);--spring:cubic-bezier(.34,1.56,.64,1)}
+*{box-sizing:border-box;margin:0;padding:0}
+html{background:var(--night)}
+body{color:var(--cream);font-family:var(--sans);line-height:1.6;-webkit-font-smoothing:antialiased;min-height:100vh;overflow-x:hidden}
+::selection{background:color-mix(in srgb,var(--mood) 40%,transparent)}
+
+/* ---------- the aura: three soft lights in the top emotions' colours ---------- */
+.aura{position:fixed;inset:0;z-index:-2;pointer-events:none;overflow:hidden}
+.aura i{position:absolute;width:62vmax;height:62vmax;border-radius:50%;filter:blur(90px);will-change:transform;transition:background-color 1.4s var(--ease),opacity 1.4s var(--ease)}
+.aura .b1{left:-14vmax;top:-18vmax;background:var(--c1);opacity:var(--a1);animation:drift1 22s ease-in-out infinite}
+.aura .b2{right:-18vmax;top:12vmax;background:var(--c2);opacity:var(--a2);animation:drift2 26s ease-in-out infinite}
+.aura .b3{left:18vmax;bottom:-30vmax;background:var(--c3);opacity:var(--a3);animation:drift3 30s ease-in-out infinite}
+.grain{position:fixed;inset:0;z-index:-1;pointer-events:none;opacity:.07;mix-blend-mode:overlay;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E")}
+
+/* ---------- top bar ---------- */
+.top{position:fixed;top:0;left:0;right:0;z-index:5;display:flex;justify-content:space-between;align-items:center;gap:12px;padding:18px clamp(16px,4vw,40px)}
+.top{transition:background-color .4s,backdrop-filter .4s,border-color .4s;border-bottom:1px solid transparent}
+.top.scrolled{background:rgba(14,13,20,.6);backdrop-filter:blur(14px);border-bottom-color:var(--line)}
+.brand{display:flex;align-items:center;gap:10px;font:500 15px var(--sans);letter-spacing:.01em}
+.brand .dot{width:12px;height:12px;border-radius:50%;background:var(--mood);box-shadow:0 0 14px var(--mood);transition:background-color 1s,box-shadow 1s}
+.seg{position:relative;display:inline-flex;padding:4px;border-radius:99px;background:rgba(244,239,230,.07);border:1px solid var(--line);backdrop-filter:blur(12px)}
+.seg button{position:relative;z-index:1;border:0;background:none;padding:6px 13px;border-radius:99px;font:500 12.5px var(--sans);color:var(--mut);cursor:pointer;transition:color .3s;white-space:nowrap}
+.seg button[aria-pressed=true]{color:var(--night)}
+.seg .pill{position:absolute;top:4px;bottom:4px;border-radius:99px;background:var(--cream);transition:left .45s var(--spring),width .45s var(--spring)}
+
+/* ---------- the stage ---------- */
+.stage{display:flex;flex-direction:column;max-width:980px;margin:0 auto;padding:clamp(110px,16vh,170px) clamp(16px,4vw,40px) 0}
+.eyebrow{font-size:13px;letter-spacing:.14em;text-transform:uppercase;color:var(--mut);margin-bottom:22px;animation:rise .9s var(--ease) both}
+/* the editor: a transparent textarea on top of a "mirror" that draws the same words, so words can glow */
+.editor{position:relative;animation:rise 1s var(--ease) .1s both}
+.editor textarea,.mirror{display:block;width:100%;font:300 clamp(34px,5.6vw,64px)/1.22 var(--serif);letter-spacing:-.015em;
+  white-space:pre-wrap;overflow-wrap:break-word;border:0;padding:0;margin:0}
+.mirror{position:absolute;inset:0;pointer-events:none;color:var(--cream)}
+.mirror .w{border-radius:.18em;transition:background-color .6s var(--ease),box-shadow .6s var(--ease),color .6s}
+.mirror .w.lit{color:#fff}
+.editor textarea{position:relative;resize:none;overflow:hidden;background:transparent;color:transparent;caret-color:var(--mood);outline:0;min-height:1.22em}
+.editor textarea::placeholder{color:var(--faint);font-style:italic}
+.editor:after{content:"";display:block;height:1px;margin-top:22px;background:linear-gradient(90deg,var(--mood),transparent 70%);opacity:.6;transition:background 1s}
+
+.verdict{display:flex;align-items:baseline;gap:14px;margin-top:30px;min-height:52px;font:italic 300 clamp(24px,3.2vw,36px)/1.25 var(--serif);color:var(--cream)}
+.verdict .emo{font-style:normal;font-size:1.05em;display:inline-block}
+.verdict .emo.pop{animation:pop .6s var(--spring)}
+.verdict .txt.fade{animation:fadein .5s var(--ease)}
+.verdict .muted{color:var(--faint)}
+
+/* spectrum: one band showing the whole mix */
+.spectrum{margin-top:22px}
+.band{display:flex;height:12px;border-radius:12px;overflow:hidden;background:rgba(244,239,230,.06);gap:2px}
+.band span{height:100%;flex:0 0 auto;transition:width .8s var(--ease);border-radius:2px}
+.legend{display:flex;flex-wrap:wrap;gap:6px 18px;margin-top:12px}
+.legend div{display:flex;align-items:center;gap:7px;font-size:13px;color:var(--faint);text-transform:capitalize;transition:color .4s}
+.legend div i{width:8px;height:8px;border-radius:50%;opacity:.5;transition:opacity .4s,transform .4s var(--spring)}
+.legend div em{font-style:normal;font-variant-numeric:tabular-nums;color:inherit}
+.legend div.on{color:var(--cream)}
+.legend div.on i{opacity:1;transform:scale(1.35)}
+
+.actions{display:flex;align-items:center;gap:16px;margin-top:34px;flex-wrap:wrap}
+.btn{display:inline-flex;align-items:center;gap:9px;padding:12px 20px;border-radius:99px;border:1px solid var(--line);background:rgba(244,239,230,.06);color:var(--cream);
+  font:500 14px var(--sans);cursor:pointer;backdrop-filter:blur(10px);transition:background .25s,border-color .25s,transform .25s var(--spring)}
+.btn:hover{background:rgba(244,239,230,.12);border-color:rgba(244,239,230,.3);transform:translateY(-2px)}
+.btn.p{background:var(--cream);color:var(--night);border-color:var(--cream)}
+.btn.p:hover{background:#fff}
+.btn .spin{display:inline-block;transition:transform .5s var(--spring)}
+.btn:hover .spin{transform:rotate(180deg)}
+.status{font-size:12.5px;color:var(--faint);display:flex;align-items:center;gap:10px}
+.status i{display:block;width:90px;height:3px;border-radius:3px;background:var(--line);overflow:hidden}
+.status b{display:block;height:100%;width:0;background:var(--mood);transition:width .25s}
+.status.ready i{display:none}
+.scroll{margin-top:64px;font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--faint);display:flex;align-items:center;gap:10px}
+.scroll:after{content:"";width:40px;height:1px;background:var(--faint)}
+
+/* ---------- the story below ---------- */
+.story{max-width:980px;margin:0 auto;padding:22px clamp(16px,4vw,40px) 72px}
+.story h2{font:300 clamp(32px,4.6vw,52px)/1.08 var(--serif);letter-spacing:-.02em;max-width:720px}
+.story h2 em{font-style:italic;color:var(--mood);transition:color 1s}
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;margin-top:36px;border-radius:20px;overflow:hidden;background:var(--line);border:1px solid var(--line)}
+.stats div{background:rgba(22,20,31,.85);padding:22px}
+.stats b{display:block;font:300 40px/1 var(--serif);letter-spacing:-.02em}
+.stats span{display:block;margin-top:8px;font-size:12.5px;color:var(--mut)}
+.twist{margin-top:28px;display:grid;grid-template-columns:1fr 1fr;gap:1px;border-radius:20px;overflow:hidden;background:var(--line);border:1px solid var(--line)}
+.twist div{background:rgba(22,20,31,.85);padding:24px}
+.twist .k{font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:var(--mut)}
+.twist .q{font:italic 300 22px/1.35 var(--serif);margin:10px 0}
+.twist .r{font-size:14px;color:var(--mut)}
+.twist .bad{color:#ff8a93}.twist .good{color:#8fd694}
+.steps{display:grid;grid-template-columns:repeat(3,1fr);gap:28px;margin-top:44px}
+.steps .n{font:300 15px var(--serif);color:var(--faint)}
+.steps h3{font:400 24px var(--serif);margin:6px 0}
+.steps p{font-size:14.5px;color:var(--mut)}
+.limits{margin-top:40px;padding-top:24px;border-top:1px solid var(--line);font-size:14px;color:var(--mut)}
+.limits b{color:var(--cream);font-weight:500}
+footer{margin-top:28px;font-size:12px;color:var(--faint)}
+footer a{color:var(--mut)}
+.reveal{opacity:0;transform:translateY(26px);transition:opacity .9s var(--ease),transform .9s var(--ease)}
+.reveal.on{opacity:1;transform:none}
+
+@keyframes drift1{0%,100%{transform:translate(0,0) scale(1)}50%{transform:translate(8vmax,6vmax) scale(1.1)}}
+@keyframes drift2{0%,100%{transform:translate(0,0) scale(1)}50%{transform:translate(-9vmax,7vmax) scale(.92)}}
+@keyframes drift3{0%,100%{transform:translate(0,0) scale(1)}50%{transform:translate(6vmax,-8vmax) scale(1.08)}}
+@keyframes rise{from{opacity:0;transform:translateY(18px)}}
+@keyframes fadein{from{opacity:0;transform:translateY(6px)}}
+@keyframes pop{0%{transform:scale(.3) rotate(-14deg)}60%{transform:scale(1.18)}100%{transform:scale(1)}}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}.reveal{opacity:1;transform:none}}
+@media (max-width:760px){.stats{grid-template-columns:repeat(2,1fr)}.twist,.steps{grid-template-columns:1fr}.brand span{display:none}}
+@media (max-width:420px){.seg button{padding:6px 10px;font-size:12px}.stats b{font-size:32px}}
+</style>
+</head>
+<body>
+<div class="aura" aria-hidden="true"><i class="b1"></i><i class="b2"></i><i class="b3"></i></div>
+<div class="grain" aria-hidden="true"></div>
+
+<header class="top">
+  <div class="brand"><i class="dot" aria-hidden="true"></i><span>Mood Reader</span></div>
+  <div class="seg" role="group" aria-label="Model">
+    <span class="pill" id="pill" aria-hidden="true"></span>
+    <button id="m-mini" aria-pressed="true">⚡ Fast</button>
+    <button id="m-distilbert" aria-pressed="false">🎯 Accurate</button>
+  </div>
+</header>
+
+<main class="stage">
+  <p class="eyebrow">Write a sentence. I'll read the feeling.</p>
+  <div class="editor">
+    <div class="mirror" id="mirror" aria-hidden="true"></div>
+    <textarea id="txt" rows="1" maxlength="240" spellcheck="false" aria-label="Your sentence" placeholder="How was your day, really?"></textarea>
+  </div>
+
+  <div class="verdict" aria-live="polite"><span class="emo" id="emo"></span><span class="txt" id="verdict"><span class="muted">Waiting for your words…</span></span></div>
+
+  <div class="spectrum">
+    <div class="band" id="band" aria-hidden="true"></div>
+    <div class="legend" id="legend"></div>
+  </div>
+
+  <div class="actions">
+    <button class="btn p" id="example"><span class="spin" aria-hidden="true">↻</span> Try an example</button>
+    <button class="btn" id="clear">Clear</button>
+    <span class="status" id="status"><span id="statusText">Loading the fast model…</span><i><b id="bar"></b></i></span>
+  </div>
+  <p class="scroll">How it works</p>
+</main>
+
+<section class="story">
+  <h2 class="reveal">A transformer that reads <em>feelings</em>, and tells you why.</h2>
+
+  <div class="stats reveal">
+    <div><b>62.5%</b><span>macro F1, accurate model (67 MB)</span></div>
+    <div><b>58.7%</b><span>macro F1, fast model (11 MB)</span></div>
+    <div><b>56.0%</b><span>word-counting baseline</span></div>
+    <div><b>40k</b><span>real Reddit comments, 7 emotions</span></div>
+  </div>
+
+  <div class="twist reveal">
+    <div><span class="k">First dataset · 89% on paper</span><p class="q">"I do not feel happy at all."</p><p class="r">→ <span class="bad">joy, 100% sure.</span> It had only learned to spot keywords.</p></div>
+    <div><span class="k">Real comments · 62% and honest</span><p class="q">"I do not feel happy at all."</p><p class="r">→ <span class="good">sadness</span>, and it knows the word <b>not</b> is what matters.</p></div>
+  </div>
+
+  <div class="steps reveal">
+    <div><span class="n">01</span><h3>Real data</h3><p>Google's GoEmotions: Reddit comments labelled by people, grouped into joy, sadness, anger, fear, surprise, disgust and neutral. Class weights stop the model from ignoring rare emotions like fear.</p></div>
+    <div><span class="n">02</span><h3>Two transformers</h3><p>DistilBERT and the 6× smaller BERT-mini, fine-tuned on a GPU, then compressed to 8-bit with no loss in accuracy. Switch between them at the top right.</p></div>
+    <div><span class="n">03</span><h3>Why, not just what</h3><p>Each word is removed in turn and the sentence is read again. Words that change the answer the most light up. Everything runs in your browser; your text never leaves your device.</p></div>
+  </div>
+
+  <p class="limits reveal"><b>Honest limits.</b> Sarcasm still fools it ("Oh great, another Monday" reads as joy). It only reads English. And people often disagree about emotions too, even GoEmotions' own annotators.</p>
+  <footer>Data: <a href="https://github.com/google-research/google-research/tree/master/goemotions" target="_blank" rel="noopener">GoEmotions</a> by Google, CC BY 4.0 · Built with PyTorch and Transformers.js</footer>
+</section>
+
+<script type="module">
+import { pipeline, env } from "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.0.2";
+env.allowLocalModels = true;
+env.allowRemoteModels = false;
+env.localModelPath = new URL("./models/", location.href).href;
+
+const ORDER = ["joy","sadness","anger","fear","surprise","disgust","neutral"];
+const EMOJI = {joy:"😄",sadness:"😢",anger:"😠",fear:"😨",surprise:"😮",disgust:"🤢",neutral:"😐"};
+const COLOR = {joy:"#FFB703",sadness:"#4A7BD0",anger:"#E63946",fear:"#7B2CBF",surprise:"#FF7AA2",disgust:"#6A994E",neutral:"#9AA0A6"};
+const EXAMPLES = [
+  "They cancelled my flight again and nobody even apologised.",
+  "I can't believe she remembered my birthday!",
+  "I do not feel happy at all.",
+  "There was a hair in my sandwich. Gross.",
+  "I'm so nervous about the interview tomorrow.",
+  "We finally got the keys to our first home today!",
+  "The package arrived on Tuesday.",
+  "Oh great, another Monday. I just love waking up at six.",
+];
+const $ = id => document.getElementById(id);
+const txt = $("txt"), mirror = $("mirror"), root = document.documentElement;
+const RM = matchMedia("(prefers-reduced-motion: reduce)").matches;
+const classifiers = {};
+let current = "mini", runId = 0, lastTop = "", exampleIndex = -1, typing = null;
+
+// ---------- models: the fast one at start, the accurate one only when asked ----------
+async function load(name) {
+  if (classifiers[name]) return classifiers[name];
+  const label = name === "mini" ? "fast (11 MB)" : "accurate (67 MB)";
+  $("status").classList.remove("ready");
+  $("statusText").textContent = `Loading the ${label} model…`;
+  $("bar").style.width = "0";
+  classifiers[name] = pipeline("text-classification", name, {
+    dtype: "q8",
+    progress_callback: p => {
+      if (p.status === "progress" && p.file?.endsWith(".onnx")) {
+        $("bar").style.width = `${p.progress.toFixed(0)}%`;
+        $("statusText").textContent = `Loading the ${label} model · ${p.progress.toFixed(0)}%`;
+      }
+    },
+  });
+  try {
+    await classifiers[name];
+  } catch (e) {
+    delete classifiers[name];
+    $("statusText").textContent = "Couldn't load the model. Open this page through a web server.";
+    throw e;
+  }
+  if (name === current) setReady();
+  return classifiers[name];
+}
+const setReady = () => { $("status").classList.add("ready"); $("statusText").textContent = `${current === "mini" ? "⚡ Fast" : "🎯 Accurate"} model · running in your browser`; };
+
+// ---------- the editor: textarea + mirror so individual words can glow ----------
+const esc = s => s.replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+let lit = { text: "", glow: null, top: null };   // last highlights, so a redraw (font load, resize) keeps them
+function paint(glow = null, top = null) {
+  if (glow) lit = { text: txt.value, glow, top };
+  else if (lit.text === txt.value) ({ glow, top } = lit);
+  // split into words AND the spaces between them, so the mirror wraps exactly like the textarea
+  let k = -1;
+  mirror.innerHTML = txt.value.split(/(\s+)/).map(part => {
+    if (!part || /^\s+$/.test(part)) return esc(part);
+    k++;
+    const g = glow ? glow[k] || 0 : 0;
+    if (g < .08) return `<span class="w">${esc(part)}</span>`;
+    const c = COLOR[top], a = Math.round(14 + g * 52);
+    return `<span class="w lit" style="background:color-mix(in srgb,${c} ${a}%,transparent);box-shadow:0 0 0 .08em color-mix(in srgb,${c} ${a}%,transparent),0 0 ${Math.round(g * 28)}px color-mix(in srgb,${c} ${Math.round(g * 60)}%,transparent)">${esc(part)}</span>`;
+  }).join("") + "​";
+  txt.style.height = "auto";
+  txt.style.height = txt.scrollHeight + "px";
+}
+
+// ---------- analysis: prediction + "leave one word out" explanation ----------
+// The model can only run one job at a time. If new text arrives while it's busy,
+// remember that and run once more afterwards, on the latest text.
+let busy = false, again = false;
+async function analyse() {
+  if (busy) { again = true; return; }
+  busy = true;
+  try { await analyseNow(); }
+  catch (e) { console.error(e); }
+  finally { busy = false; if (again) { again = false; analyse(); } }
+}
+
+async function analyseNow() {
+  const text = txt.value.trim(), id = ++runId;
+  if (!text) return showEmpty();
+  const clf = await load(current);
+  const words = text.split(/\s+/);
+  const variants = [text, ...words.slice(0, 40).map((_, i) => words.filter((_, j) => j !== i).join(" ") || " ")];
+  const out = await clf(variants, { top_k: null });
+  if (id !== runId) return;                                   // the user kept typing: drop this result
+  const score = o => Object.fromEntries(o.map(x => [x.label, x.score]));
+  const s = score(out[0]);
+  const top = ORDER.reduce((a, b) => s[a] > s[b] ? a : b);
+  const impact = out.slice(1).map(o => Math.log(s[top]) - Math.log(Math.max(score(o)[top], 1e-6)));
+  const max = Math.max(...impact, .35);
+  paint(impact.map(v => Math.max(0, v) / max), top);
+  show(s, top);
+}
+
+function showEmpty() {
+  paint();
+  show(Object.fromEntries(ORDER.map(e => [e, 0])), null);
+}
+
+// ---------- display ----------
+$("band").innerHTML = ORDER.map(e => `<span id="band-${e}" style="background:${COLOR[e]};width:0"></span>`).join("");
+$("legend").innerHTML = ORDER.map(e => `<div id="lg-${e}"><i style="background:${COLOR[e]}"></i>${e} <em>0%</em></div>`).join("");
+
+function show(s, top) {
+  for (const e of ORDER) {
+    $(`band-${e}`).style.width = `calc(${(s[e] * 100).toFixed(2)}% - 2px)`;
+    $(`lg-${e}`).querySelector("em").textContent = `${Math.round(s[e] * 100)}%`;
+    $(`lg-${e}`).classList.toggle("on", e === top);
+  }
+  // the aura: the three strongest emotions become three drifting lights
+  const ranked = ORDER.slice().sort((a, b) => s[b] - s[a]);
+  const lights = top ? ranked : ["neutral", "sadness", "fear"];
+  ["c1", "c2", "c3"].forEach((v, i) => root.style.setProperty(`--${v}`, COLOR[lights[i]]));
+  root.style.setProperty("--a1", top ? (.2 + s[ranked[0]] * .3).toFixed(2) : ".16");
+  root.style.setProperty("--a2", top ? (.08 + s[ranked[1]] * .5).toFixed(2) : ".1");
+  root.style.setProperty("--a3", top ? (.05 + s[ranked[2]] * .5).toFixed(2) : ".08");
+  root.style.setProperty("--mood", top ? COLOR[top] : "#F4EFE6");
+
+  const v = $("verdict"), emo = $("emo");
+  if (!top) { emo.textContent = ""; v.innerHTML = '<span class="muted">Waiting for your words…</span>'; lastTop = ""; return; }
+  const second = s[ranked[1]] > .2 ? `, with a hint of ${ranked[1]}` : "";
+  const sentence = s[top] > .8 ? `Clearly ${top}${second}.` : s[top] > .5 ? `Mostly ${top}${second}.` : `Mixed feelings. Leaning ${top}${second}.`;
+  if (top !== lastTop && !RM) { emo.classList.remove("pop"); void emo.offsetWidth; emo.classList.add("pop"); v.classList.remove("fade"); void v.offsetWidth; v.classList.add("fade"); }
+  lastTop = top;
+  emo.textContent = EMOJI[top];
+  v.textContent = `${sentence} `;
+  const pct = document.createElement("span"); pct.className = "muted"; pct.textContent = `${Math.round(s[top] * 100)}%`;
+  v.appendChild(pct);
+}
+
+// ---------- interactions ----------
+let timer;
+txt.addEventListener("input", () => { stopTyping(); paint(); clearTimeout(timer); timer = setTimeout(analyse, 140); });
+txt.addEventListener("keydown", e => { if (e.key === "Enter") e.preventDefault(); });   // one sentence, one line of thought
+
+// "Try an example" types the sentence in front of you, so you watch the model change its mind
+function stopTyping() { if (typing) { clearInterval(typing); typing = null; } }
+$("example").onclick = () => {
+  stopTyping();
+  exampleIndex = (exampleIndex + 1) % EXAMPLES.length;
+  const target = EXAMPLES[exampleIndex];
+  if (RM) { txt.value = target; paint(); analyse(); return; }
+  txt.value = ""; paint(); let i = 0;
+  typing = setInterval(() => {
+    txt.value = target.slice(0, ++i); paint();
+    if (/[\s.!?]/.test(target[i - 1]) || i === target.length) analyse();   // re-read at each word
+    if (i >= target.length) stopTyping();
+  }, 38);
+};
+$("clear").onclick = () => { stopTyping(); txt.value = ""; showEmpty(); txt.focus(); };
+
+function placePill() {
+  const on = document.querySelector(".seg button[aria-pressed=true]");
+  $("pill").style.left = on.offsetLeft + "px"; $("pill").style.width = on.offsetWidth + "px";
+}
+for (const name of ["mini", "distilbert"]) {
+  $(`m-${name}`).onclick = async () => {
+    if (current === name) return;
+    current = name;
+    document.querySelectorAll(".seg button").forEach(b => b.setAttribute("aria-pressed", b.id === `m-${name}`));
+    placePill();
+    try { await load(name); setReady(); analyse(); } catch (e) { console.error(e); }
+  };
+}
+addEventListener("resize", () => { placePill(); paint(); });
+document.fonts?.ready.then(() => { placePill(); paint(); });
+
+const io = new IntersectionObserver(es => es.forEach(e => { if (e.isIntersecting) { e.target.classList.add("on"); io.unobserve(e.target); } }), { threshold: .2 });
+document.querySelectorAll(".reveal").forEach(el => io.observe(el));
+
+addEventListener("scroll", () => document.querySelector(".top").classList.toggle("scrolled", scrollY > 40), { passive: true });
+
+// start: the fast model, then type the first example so the page comes alive
+placePill(); showEmpty();
+const shared = new URLSearchParams(location.search).get("text");
+load("mini").then(() => { if (shared) { txt.value = shared; paint(); analyse(); } else $("example").click(); }).catch(console.error);
+</script>
+</body>
+</html>

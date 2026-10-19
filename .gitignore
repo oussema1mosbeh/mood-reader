@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+.ipynb_checkpoints/
+.vscode/
+.env
+.vercel/
+# datasets (downloaded by 00_download.py)
+data/
+# full-size fine-tuned models (hundreds of MB) - the web app uses the compressed copies in demo/models/
+/models/
+/export/
